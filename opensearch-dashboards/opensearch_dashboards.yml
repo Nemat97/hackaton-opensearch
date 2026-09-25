@@ -1,0 +1,10 @@
+# Settings that do not depend on the service reference. entrypoint.sh passes
+# the connection to OpenSearch and the port as environment variables, which
+# the upstream entrypoint turns into command line options.
+
+server.host: "0.0.0.0"
+
+# Browsers send the credentials of Deploio's basic auth in the Authorization
+# header, which Dashboards would otherwise forward to OpenSearch in place of
+# the credentials of the service reference.
+opensearch.requestHeadersAllowlist: []

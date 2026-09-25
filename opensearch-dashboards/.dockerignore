@@ -1,0 +1,7 @@
+# Docs are not part of the image.
+README.md
+
+# Local editor / OS / language artifacts.
+.DS_Store
+__pycache__/
+*.py[cod]
