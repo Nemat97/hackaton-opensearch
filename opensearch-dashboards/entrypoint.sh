@@ -5,7 +5,8 @@ CA_DIR="/tmp/deploio-ca"
 CONFIG_FILE="/tmp/deploio-opensearch-dashboards.yml"
 DOCS_URL="https://docs.nine.ch/docs/deplo-io/configuration/deploio-connecting-to-services"
 
-# OpenSearch is reachable over HTTPS on port 443 and Deploio injects no port.
+# The public endpoint of OpenSearch listens on port 443. With private
+# networking, Deploio injects the port of the endpoint in the service mesh.
 DEFAULT_PORT=443
 
 # Data sources created by this script carry this prefix in their id, so stale
@@ -28,6 +29,23 @@ json_quote() {
 # Label of a reference as shown in the UI: the name given with --service.
 label_of() {
     echo "$1" | tr 'A-Z_' 'a-z-'
+}
+
+# URL of an OpenSearch endpoint. The public endpoint speaks HTTPS only, while
+# the endpoint in the service mesh of private networking speaks plain HTTP, as
+# the mesh encrypts the traffic itself. The variables look the same for both,
+# so the scheme is probed; any HTTP response, even 401, settles it. An
+# endpoint that does not answer at all is assumed to be HTTPS on port 443 and
+# plain HTTP on any other port.
+endpoint_of() {
+    if curl -s -k -m 5 -o /dev/null "https://$1:$2/"; then
+        echo "https://$1:$2"
+    elif curl -s -m 5 -o /dev/null "http://$1:$2/"; then
+        echo "http://$1:$2"
+    else
+        echo "Warning: $1:$2 does not answer, guessing the scheme from the port" >&2
+        if [ "$2" = 443 ]; then echo "https://$1:$2"; else echo "http://$1:$2"; fi
+    fi
 }
 
 # Register the given references as data sources once the server accepts
@@ -54,13 +72,13 @@ register_data_sources() {
         prefix="NINE_OS_${reference}_"
         label="$(label_of "${reference}")"
         id="${DATA_SOURCE_PREFIX}${label}"
-        port="$(printenv "${prefix}PORT" || echo "${DEFAULT_PORT}")"
+        eval "endpoint=\${endpoint_${reference}}"
         registered="${registered} ${id}"
 
         body="{\"attributes\":{
             \"title\":$(json_quote "${label}"),
             \"description\":$(json_quote "Service reference ${label}, configured by Deploio"),
-            \"endpoint\":$(json_quote "https://$(printenv "${prefix}FQDN"):${port}"),
+            \"endpoint\":$(json_quote "${endpoint}"),
             \"auth\":{\"type\":\"username_password\",\"credentials\":{
                 \"username\":$(json_quote "$(printenv "${prefix}USER" || echo '')"),
                 \"password\":$(json_quote "$(printenv "${prefix}PASSWORD" || echo '')")
@@ -143,7 +161,7 @@ chmod 600 "${CONFIG_FILE}"
 # The certificate of an On-Demand service does not match its host name, so
 # the chain is verified without checking the host name. Dashboards has a
 # single TLS setting for all data sources, so each of them trusts the CA
-# certificates of all of them.
+# certificates of all of them. Endpoints speaking plain HTTP ignore them.
 data_sources=""
 data_source_cas=""
 data_source_verification=certificate
@@ -154,10 +172,15 @@ for reference in ${references}; do
     fqdn="$(printenv "${prefix}FQDN")"
     port="$(printenv "${prefix}PORT" || echo "${DEFAULT_PORT}")"
     certificate="$(printenv "${prefix}CA_CERT" || echo '')"
+    endpoint="$(endpoint_of "${fqdn}" "${port}")"
+    # Read by register_data_sources; reference names are [A-Z0-9_] only.
+    eval "endpoint_${reference}=\${endpoint}"
 
     file=""
     verification=none
-    if [ -n "${certificate}" ]; then
+    if [ "${endpoint%%:*}" = http ]; then
+        verification="none, plain HTTP in the service mesh"
+    elif [ -n "${certificate}" ]; then
         file="${CA_DIR}/os-${label}.pem"
         printf '%s\n' "${certificate}" > "${file}"
         chmod 644 "${file}"
@@ -166,13 +189,15 @@ for reference in ${references}; do
 
     if [ "${reference}" != "${primary}" ]; then
         data_sources="${data_sources} ${reference}"
-        if [ -n "${file}" ]; then
+        if [ "${endpoint%%:*}" = http ]; then
+            :
+        elif [ -n "${file}" ]; then
             data_source_cas="${data_source_cas:+${data_source_cas}, }$(yaml_quote "${file}")"
         else
             data_source_verification=none
         fi
 
-        echo "Configured service: ${display} (https://${fqdn}:${port}, data source)"
+        echo "Configured service: ${display} (${endpoint}, data source)"
         continue
     fi
 
@@ -188,15 +213,15 @@ for reference in ${references}; do
     authorization="Basic $(printf '%s:%s' "${user}" "${password}" | base64 -w0)"
 
     {
-        echo "opensearch.hosts: [$(yaml_quote "https://${fqdn}:${port}")]"
+        echo "opensearch.hosts: [$(yaml_quote "${endpoint}")]"
         echo "opensearch.username: $(yaml_quote "${user}")"
         echo "opensearch.password: $(yaml_quote "${password}")"
         echo "opensearch.customHeaders: {Authorization: $(yaml_quote "${authorization}")}"
-        echo "opensearch.ssl.verificationMode: ${verification}"
+        echo "opensearch.ssl.verificationMode: ${verification%%,*}"
         [ -z "${file}" ] || echo "opensearch.ssl.certificateAuthorities: [$(yaml_quote "${file}")]"
     } >> "${CONFIG_FILE}"
 
-    echo "Configured service: ${display} (https://${fqdn}:${port}, verificationMode=${verification}, stores saved objects)"
+    echo "Configured service: ${display} (${endpoint}, verificationMode=${verification}, stores saved objects)"
 done
 
 if [ -n "${data_sources}" ]; then

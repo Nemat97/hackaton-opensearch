@@ -2,7 +2,7 @@ The OpenSearch Dashboards version can be set with the `OPENSEARCH_DASHBOARDS_VER
 
 ## Configuration
 
-`entrypoint.sh` maps the `NINE_OS_<NAME>_*` [service variables](https://docs.nine.ch/docs/deplo-io/configuration/deploio-connecting-to-services) into a configuration file at `/tmp/deploio-opensearch-dashboards.yml`, which is loaded after the bundled `opensearch_dashboards.yml`. Without any reference the app does not start, unless the connection is configured by hand with the `OPENSEARCH_HOSTS` variables of the [official image](https://hub.docker.com/r/opensearchproject/opensearch-dashboards). Deplo.io injects no port for OpenSearch, so port 443 is used.
+`entrypoint.sh` maps the `NINE_OS_<NAME>_*` [service variables](https://docs.nine.ch/docs/deplo-io/configuration/deploio-connecting-to-services) into a configuration file at `/tmp/deploio-opensearch-dashboards.yml`, which is loaded after the bundled `opensearch_dashboards.yml`. Without any reference the app does not start, unless the connection is configured by hand with the `OPENSEARCH_HOSTS` variables of the [official image](https://hub.docker.com/r/opensearchproject/opensearch-dashboards). Without an injected port, port 443 is used. The public endpoint speaks HTTPS only, while the endpoint in the service mesh of [private networking](https://docs.nine.ch/docs/networking/private-networking) speaks plain HTTP, as the mesh encrypts the traffic itself. Both are injected the same way, so the scheme of every endpoint is probed at startup.
 
 ### Multiple clusters
 
